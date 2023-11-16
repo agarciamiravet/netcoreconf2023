@@ -1,0 +1,27 @@
+﻿@page "/"
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@using Microsoft.Extensions.Configuration;
+@using NetCoreConfmad2023.Front.Data;
+@using NetCoreConfmad2023.Front.Services;
+
+@inject CatalogService CatalogService
+
+<h3>Catalog</h3>
+
+<ProductList Products="products" DisplayBuyButton="true"></ProductList>
+
+@code {
+
+    private List<Product> products =  new();
+    private bool shouldRender;
+
+    protected override bool ShouldRender() => shouldRender;
+
+    protected override async Task OnInitializedAsync()
+    {
+        products = await CatalogService.GetAllProducts();
+        shouldRender = true;
+    }
+
+}

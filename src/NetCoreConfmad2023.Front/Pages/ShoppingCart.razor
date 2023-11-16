@@ -1,0 +1,26 @@
+﻿@page "/shopping-cart"
+
+
+
+@using NetCoreConfmad2023.Front.Data;
+@using NetCoreConfmad2023.Front.Services;
+
+@inject CartService CartService
+
+@code {
+
+    private List<Product> products = new();
+    private bool shouldRender;
+
+    protected override bool ShouldRender() => shouldRender;
+
+    protected override async Task OnInitializedAsync()
+    {
+        products = await CartService.GetBasketCart();
+        shouldRender = true;
+    }
+
+}
+
+<h3>You have @products.Count in cart:</h3>
+<ProductList Products="products"></ProductList>
