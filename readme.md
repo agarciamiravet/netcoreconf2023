@@ -221,4 +221,191 @@ Para ver como crear este fichero de configuración, consultar el siguiente enlac
 
 ## Configurar OpenTelemetry en .Net Core
 
-Para detalles de cómo configurar OpenTelemetry usar el siguiente enlace: https://opentelemetry.io/docs/instrumentation/net/manual/ 
+##### Frontal
+
+En el proyecto del frontal hemos tenido que añadir las siguientes librerías:
+
+- OpenTelemetry.Exporter.OpenTelemetryProtocol
+
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.AspNetCore
+- OpenTelemetry.Instrumentation.Http
+
+Como se puede observar todas las librerías caen dentro del namespace **OpenTelemetry**. Nada más que buscar paquetes de nuget por OpenTelemetry, y verás que ya hay bastantes paquetes actualmente disponibles:
+
+<img src="images/paquetes.png" style="zoom:67%;" />
+
+En el caso del proyecto del frontal, tenemos la siguiente configuración para habilitar únicamente las trazas:
+
+```c#
+builder.Services.AddOpenTelemetry().WithTracing(builder =>
+{
+    builder.AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(observabilityOptions.ServiceName))
+        .AddOtlpExporter(opts =>
+        {
+            opts.Endpoint = new Uri(observabilityOptions.CollectorUrl);
+        });
+});
+```
+
+Destacar en esta configuración que a través de la propiedad **Endpoint** decimos la url donde nuestro Otel Collector va a estar escuchando.
+
+##### Api
+
+Si vamos al proyecto de la api, hemos tenido que instalar más paquetes que son:
+
+- OpenTelemetry.Exporter.OpenTelemetryProtocol
+- OpenTelemetry.Exporter.Prometheus.AspNetCore
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.AspNetCore
+- OpenTelemetry.Instrumentation.EntityFrameworkCore
+- OpenTelemetry.Instrumentation.Http
+- OpenTelemetry.Instrumentation.Process
+- OpenTelemetry.Instrumentation.Runtime
+- OpenTelemetry.Instrumentation.SqlClient
+- OpenTelemetry.Instrumentation.StackExchangeRedis
+
+Además debido al uso de Serilog como nuestro framework de logging hemos instalado las siguientes librerías:
+
+- Serilog.AspNetCore
+- Serilog.Enrichers.Environment
+- Serilog.Enrichers.Thread
+- Serilog.Sinks.Console
+- Serilog.Sinks.OpenTelemetry
+
+En el caso de la API hemos configurado todo, es decir las métricas los logs y las trazas.
+
+En el caso de la métricas la configuración ha sido la siguiente:
+
+```c#
+ var meters = new NetCoreConf2023Metrics();
+
+ builder.WithMetrics(metrics =>
+ {           
+     var meter = new Meter(observabilityOptions.ServiceName);
+
+     metrics
+         .AddMeter(meter.Name)
+          .AddMeter(meters.MetricName)
+         .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(meter.Name))
+         .AddRuntimeInstrumentation()
+         .AddProcessInstrumentation()
+         .AddAspNetCoreInstrumentation();
+     metrics
+         .AddOtlpExporter(options =>
+         {
+             options.Endpoint = observabilityOptions.CollectorUri;
+             options.ExportProcessorType = ExportProcessorType.Batch;
+             options.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+         });
+ });
+
+ builder.Services.AddSingleton<NetCoreConf2023Metrics>(meters);
+```
+
+Destacar en esta configuración, la agregación de métricas customs  (línea **.AddMeter(meters.MetricName)**). 
+
+Para saber más sobre métricas, ver este post de Fernando Escolar en su blog:
+
+https://www.developerro.com/2023/09/20/dotnet-metrics/
+
+En el caso de los logs la configuración ha sido la siguiente:
+
+```c#
+    var environment = context.HostingEnvironment.EnvironmentName;
+    var configuration = context.Configuration;
+
+    ObservabilityOptions observabilityOptions = new();
+
+    configuration
+        .GetSection(nameof(ObservabilityOptions))
+        .Bind(observabilityOptions);
+
+    var serilogSection = $"{nameof(ObservabilityOptions)}:{nameof(ObservabilityOptions)}:Serilog";
+
+    var config = context.Configuration.GetRequiredSection("ObservabilityOptions:Serilog");
+
+    options
+        .ReadFrom.Configuration(config)
+        .Enrich.FromLogContext()
+        .Enrich.WithEnvironmentVariable(environment)
+        .Enrich.WithProperty("ApplicationName", observabilityOptions.ServiceName)
+        .WriteTo.Console();
+
+    options.WriteTo.OpenTelemetry(cfg =>
+    {
+        cfg.Endpoint = $"{observabilityOptions.CollectorUrl}/v1/logs";
+        cfg.IncludedData = IncludedData.TraceIdField | IncludedData.SpanIdField;
+        cfg.ResourceAttributes = new Dictionary<string, object>
+                                    {
+                                        {"service.name", observabilityOptions.ServiceName},
+                                        {"index", 10},
+                                        {"flag", true},
+                                        {"value", 3.14}
+                                    };
+    });
+
+});
+```
+
+
+
+Por último en el caso de las trazas la configuración ha sido la siguiente:
+
+```c#
+    tracing
+        .AddSource(observabilityOptions.ServiceName)
+        .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(observabilityOptions.ServiceName))
+        .SetErrorStatusOnException()
+        .SetSampler(new AlwaysOnSampler())
+        .AddAspNetCoreInstrumentation(options =>
+        {
+            //options.EnableGrpcAspNetCoreSupport = true;
+            options.RecordException = true;
+        })
+        .AddHttpClientInstrumentation()                
+        .AddEntityFrameworkCoreInstrumentation(options =>
+                {
+                    options.EnrichWithIDbCommand = (activity, command) =>
+                     {
+                         var stateDisplayName = $"{command.CommandType} main";
+                         activity.DisplayName = stateDisplayName;
+                         activity.SetTag("db.name", stateDisplayName);
+                         activity.SetTag("db.query", command.CommandText);
+                     };
+                })
+                .AddRedisInstrumentation()
+               .ConfigureRedisInstrumentation((sp, i) =>
+                {
+                    var cache = (RedisCache)sp.GetRequiredService<IDistributedCache>();
+                    var conn = cache.GetConnection();
+                    i.AddConnection(cache.GetConnection());
+                });
+
+    tracing
+        .AddOtlpExporter(options =>
+        {
+            options.Endpoint = observabilityOptions.CollectorUri;
+            options.ExportProcessorType = ExportProcessorType.Batch;
+            options.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+        });
+});
+```
+
+
+
+Para detalles de cómo configurar OpenTelemetry en .Net Core visitar los siguientes enlaces: 
+
+- https://github.com/open-telemetry/opentelemetry-dotnet
+
+- https://opentelemetry.io/docs/instrumentation/net/manual/ 
+
+## Enlaces de interés
+
+- Getting started with OpenTelemetry and distributed tracing in .NET - (https://www.mytechramblings.com/posts/getting-started-with-opentelemetry-and-dotnet-core/)
+- ASP.NET Core: Monitoreo con OpenTelemetry y Grafana (https://dev.to/isaacojeda/aspnet-core-monitoreo-con-opentelemetry-y-grafana-57m9)
+- OpenTelemetry with Jaeger in .NET Core (https://medium.com/@niteshsinghal85/opentelemetry-with-jaeger-in-net-core-9b1e009a73dc)
+- Monitoring a .NET application using OpenTelemetry - (https://www.meziantou.net/monitoring-a-dotnet-application-using-opentelemetry.htm)
+- 

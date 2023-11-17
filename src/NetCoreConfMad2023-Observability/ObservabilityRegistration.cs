@@ -177,7 +177,6 @@ public static class ObservabilityRegistration
 
     public static IHostBuilder AddSerilog(this IHostBuilder hostBuilder)
     {
-
         hostBuilder
             .UseSerilog((context, provider, options) =>
             {
@@ -192,15 +191,14 @@ public static class ObservabilityRegistration
 
                 var serilogSection = $"{nameof(ObservabilityOptions)}:{nameof(ObservabilityOptions)}:Serilog";
 
-                var g = context.Configuration.GetRequiredSection("ObservabilityOptions:Serilog");
+                var config = context.Configuration.GetRequiredSection("ObservabilityOptions:Serilog");
 
                 options
-                    .ReadFrom.Configuration(g)
+                    .ReadFrom.Configuration(config)
                     .Enrich.FromLogContext()
                     .Enrich.WithEnvironmentVariable(environment)
                     .Enrich.WithProperty("ApplicationName", observabilityOptions.ServiceName)
                     .WriteTo.Console();
-
 
                 options.WriteTo.OpenTelemetry(cfg =>
                 {
